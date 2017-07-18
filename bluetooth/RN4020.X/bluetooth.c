@@ -1,8 +1,11 @@
 #define FCY 29641200L               //number of instructions per milisec
 #define FOSC (FCY*4)                //number of clock cycles
 #define UART_BUFFER_SIZE 256
-#define BAUDRATE 115200
+#define BAUDRATE 38400
 #define BRGVAL ((FCY/BAUDRATE)/16)-1
+#define SETUP_BUF_LENGTH 20
+#define ANAL_BUF_LENGTH  15
+#define M_SEC FCY*0.01 //0.001
 
 #pragma config FCKSMEN=CSW_FSCM_OFF
 #pragma config FOS=PRI //fonte cristal
@@ -20,6 +23,7 @@
 #include <stdio.h>
 #include "UART.h"
 #include "CAN.h"
+#include <delay.h>
 
 volatile unsigned int UART_write = 0;
 volatile unsigned int UART_read = 0;
@@ -28,16 +32,38 @@ volatile unsigned char UARTbuffer[UART_BUFFER_SIZE];
 void UART1_config(void);
 void UART_send(char *UARTdata, int n);
 void __attribute__((interrupt, auto_psv)) _U1RXInterrupt(void);
+void timer1_init(void);
+
+void timer1_init(void){
+
+	T1CONbits.TCS   = 0;		/* use internal clock: Fcy               */
+	T1CONbits.TGATE = 0;		/* Gated mode off                        */
+	T1CONbits.TCKPS = 0;		/* prescale 1:1                          */
+	T1CONbits.TSIDL = 0;		/* don't stop the timer in idle          */
+
+	TMR1 = 0;					/* clears the timer register             */
+	PR1 = M_SEC;				/* value at which the register overflows *
+								 * and raises T1IF                       */
+
+	/* interruptions */
+	IPC0bits.T1IP = 2;			/* Timer 1 Interrupt Priority 0-7        */
+	IFS0bits.T1IF = 0;			/* clear interrupt flag                  */
+	IEC0bits.T1IE = 1;			/* Timer 1 Interrupt Enable              */
+
+
+	T1CONbits.TON = 1;			/* starts the timer                      */
+	return;
+}
 
 /*MAIN*/
 int main (void){
     
-    RCONbits.SWDTEN=1; //Enable Watchdog
+    RCONbits.SWDTEN=1; //Enable Watchdog timer
     char st[14];
     char st_valor[14];
-    int temperatura = 24;
-    int tensao = 3;
-    int corre= 9;
+    int temperatura = 20;
+    int tensao = 5;
+    int corre= 10;
     
     _TRISD3 = 0; // output
     _TRISD1 = 0; //output
@@ -50,12 +76,14 @@ int main (void){
 
     sprintf(st_valor, "t%d;v%d;i%d\n",temperatura,tensao,corre);
     strcat(st, st_valor);
-    strcpy(st, "ola mundo");
+   
+    init_BLE();
+    __delay_ms(100);
+    timer1_init();
     
-    while (1)
-    //init_BLE();
-        UART_send(st, strlen(st));
-    
+   while (1);
+//    UART_send("ola\n\r", strlen("ola\n\r"));
+//   //}
 }
 
 //#define BRGVAL 4
@@ -130,29 +158,33 @@ void __attribute__((interrupt, auto_psv)) _U1RXInterrupt(void){
 	return;
 }
 
-
 void init_BLE(){
  
     char name_int[SETUP_BUF_LENGTH] = "S-,BMS\r\n"; // Set device name to ?Central?
-    char baudrate[SETUP_BUF_LENGTH] = "SB,4\r\n"; //BAUD RATE 115200
+    char baudrate[SETUP_BUF_LENGTH] = "SB,3\r\n"; //BAUD RATE 38400
    
+    char echo[SETUP_BUF_LENGTH] = "+\r\n"; //echo
+    char mode[SETUP_BUF_LENGTH]="SR,32000000\r\n"; //central, enable MLPD, UART Flow Control
+    
     char save_data[SETUP_BUF_LENGTH] = "SF,1\r"; //Save most of the configurable configurations in the next reboot 
     char name_public[SETUP_BUF_LENGTH] = "SN,BMS\r\n"; //name to appear in the network
     
-    char mode[SETUP_BUF_LENGTH]="SR,92000000\r\n"; //central, enable MLPD, UART Flow Control NOTA!!!! 
+    char dev_info[SETUP_BUF_LENGTH]="SS,C0000000\n\r"; //enable support of the Device Information
+    
+    char reboot[SETUP_BUF_LENGTH] = "R,1\r\n"; //restart
 
-    /*char reboot[SETUP_BUF_LENGTH] = "R,1\r\n";restart
-    char echo[SETUP_BUF_LENGTH] = "+\r\n"; echo*/
     
     /*
-     * char dev_info[SETUP_BUF_LENGTH] = "SS,80000000\r\n"; //valor default, info device
      * char ILT[SETUP_BUF_LENGTH] = "ST,0017,0002,0064\r\n";
      * char timer1_ble[SETUP_BUF_LENGTH] = "SM,1,000f4240\r\n"; // Start Timer1 to expire in 1 second CONFIRM
      */
 
 
     //UART_send(save_data, strlen(save_data));
-
+    UART_send(reboot,strlen(reboot));
+    UART_send(echo, strlen(echo));
+    UART_send(save_data, strlen(save_data));
+    
     UART_send(name_int, strlen(name_int));
     UART_send(baudrate, strlen(baudrate));
  
@@ -160,7 +192,16 @@ void init_BLE(){
     UART_send(name_public,strlen(name_public));
     
     
-    //UART_send(reboot,strlen(reboot));
-   // UART_send(echo, strlen(echo));
+    UART_send(reboot,strlen(reboot));
+    
    
+}
+
+void __attribute__((interrupt, auto_psv, shadow)) _T1Interrupt(void){
+    
+//    execution_time++;
+
+	IFS0bits.T1IF = 0;		/* clears interruption flag */
+    UART_send("+\r\n", strlen("+\r\n"));
+	return;
 }
